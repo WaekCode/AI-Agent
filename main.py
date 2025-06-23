@@ -138,6 +138,45 @@ def call_function(function_call_part, verbose=False):
     else:
         print(f" - Calling function: {function_call_part.name}")
 
+    function_mapping = {
+        "get_files_info": get_files_info,
+        "get_file_content": get_file_content,
+        "write_file": write_file,
+        "run_python_file": run_python_file
+    }
+
+    function_name = function_call_part.name
+    args = dict(function_call_part.args)
+    args["working_directory"] = "./calculator"
+
+    if function_name in function_mapping:
+        the_function = function_mapping[function_name]
+        function_result = the_function(**args)
+        return types.Content(
+            role="tool",
+            parts=[
+                types.Part.from_function_response(
+                    name=function_name,
+                    response={"result": function_result},
+                )
+            ],
+        )
+    else:
+        return types.Content(
+            role="tool",
+            parts=[
+                types.Part.from_function_response(
+                    name=function_name,
+                    response={"error": f"Unknown function: {function_name}"},
+                )
+            ],
+        )
+
+
+
+
+
+
 
 
 ###########################################################
@@ -167,7 +206,16 @@ else:
 if response.function_calls:
     print("\nFunction call(s) detected:")
     for fc in response.function_calls:
-        call_function(fc,verbose)
+        function_call_result = call_function(fc, verbose)
+        # Check the result has the proper structure
+        if (
+            not hasattr(function_call_result.parts[0], "function_response")
+            or not hasattr(function_call_result.parts[0].function_response, "response")
+        ):
+            raise Exception("Function call did not return a valid function_response.")
+        # Show result in verbose mode
+        if verbose:
+            print(f"-> {function_call_result.parts[0].function_response.response}")
 else:
     print("No function call was returned.")
 
@@ -188,5 +236,6 @@ else:
 
 
 print(response.text)
+
 #print(f"Prompt tokens: {response.usage_metadata.prompt_token_count}")
 #print(f"Response tokens: {response.usage_metadata.candidates_token_count}")
