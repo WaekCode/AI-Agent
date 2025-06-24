@@ -9,7 +9,6 @@ from functions.run_python import run_python_file
 from functions.write_file import write_file
 
 
-
 # Load variables from .env file
 load_dotenv()
 
@@ -25,14 +24,19 @@ else:
 client = genai.Client(api_key=api_key)
 
 
+user = sys.argv[1] if len(sys.argv) > 1 else None
+if not user:
+    print("Error: Please provide a prompt as a command line argument.")
+    print('Usage: python3 main.py "Your prompt here"')
+    exit(1)  # Exit with code 1 as instructed
 
-user = sys.argv[1]
+
 
 messages = [
     types.Content(role="user", parts=[types.Part(text=user)]),
-
 ]
-system_prompt='''"""
+
+system_prompt = '''"""
 You are a helpful AI coding agent.
 
 When a user asks a question or makes a request, make a function call plan. You can perform the following operations:
@@ -44,9 +48,6 @@ When a user asks a question or makes a request, make a function call plan. You c
 
 All paths you provide should be relative to the working directory. You do not need to specify the working directory in your function calls as it is automatically injected for security reasons.
 """"'''
-
-
-
 
 
 schema_get_files_info = types.FunctionDeclaration(
@@ -70,7 +71,7 @@ schema_write_file = types.FunctionDeclaration(
     parameters=types.Schema(
         type=types.Type.OBJECT,
         properties={
-             "file_path": types.Schema(
+            "file_path": types.Schema(
                 type=types.Type.STRING,
                 description="Path to the file to write to, relative to the working directory.",
             ),
@@ -79,12 +80,9 @@ schema_write_file = types.FunctionDeclaration(
                 type=types.Type.STRING,
                 description='the content to write in to the file'
             ),
-
-           
         },
     ),
 )
-
 
 ####################################################################
 schema_run_python_file = types.FunctionDeclaration(
@@ -101,7 +99,6 @@ schema_run_python_file = types.FunctionDeclaration(
     ),
 )
 
-
 ####################################################################
 schema_get_file_content = types.FunctionDeclaration(
     name="get_file_content",
@@ -117,19 +114,16 @@ schema_get_file_content = types.FunctionDeclaration(
     ),
 )
 
-
 ####################################################################
 
 available_functions = types.Tool(
-    function_declarations=[schema_get_files_info,
-                           schema_get_file_content,
-                           schema_run_python_file,
-                           schema_write_file]
+    function_declarations=[
+        schema_get_files_info,
+        schema_get_file_content,
+        schema_run_python_file,
+        schema_write_file
+    ]
 )
-
-
-
-    
 
 
 def call_function(function_call_part, verbose=False):
@@ -173,69 +167,55 @@ def call_function(function_call_part, verbose=False):
         )
 
 
+def main():
+    verbose = '--verbose' in sys.argv
+    MAX_ITERS = 20
+    iters = 0
 
+    while iters < MAX_ITERS:
+        iters += 1
 
+        response = client.models.generate_content(
+            model='gemini-2.0-flash-001',
+            contents=messages,
+            config=types.GenerateContentConfig(tools=[available_functions], system_instruction=system_prompt),
+        )
 
-
-
-
-###########################################################
-response = client.models.generate_content(
-    model='gemini-2.0-flash-001',
-    contents=messages,
-    config=types.GenerateContentConfig(tools=[available_functions],system_instruction=system_prompt),
-)
-
-
-
-
-
-
-# if hasattr(response, "text") and response.text:
-#     print("LLM Response Text:")
-#     print(response.text)
-# else:
-#     print("No direct text response.")
-
-if '--verbose' in sys.argv:
-    verbose = True
-else:
-    verbose = False
-
-
-if response.function_calls:
-    print("\nFunction call(s) detected:")
-    for fc in response.function_calls:
-        function_call_result = call_function(fc, verbose)
-        # Check the result has the proper structure
-        if (
-            not hasattr(function_call_result.parts[0], "function_response")
-            or not hasattr(function_call_result.parts[0].function_response, "response")
-        ):
-            raise Exception("Function call did not return a valid function_response.")
-        # Show result in verbose mode
         if verbose:
-            print(f"-> {function_call_result.parts[0].function_response.response}")
-else:
-    print("No function call was returned.")
+            print(f"\nIteration {iters}:")
+            print("Prompt tokens:", response.usage_metadata.prompt_token_count)
+            print("Response tokens:", response.usage_metadata.candidates_token_count)
+
+        # Add all candidates' content to messages
+        if response.candidates:
+            for candidate in response.candidates:
+                messages.append(candidate.content)
+
+        # If no function calls, print final text and break
+        if not response.function_calls:
+            print("\nFinal LLM Response:")
+            print(response.text)
+            break
+
+        # Call all functions requested and append their results
+        function_responses = []
+        for function_call_part in response.function_calls:
+            function_call_result = call_function(function_call_part, verbose)
+            if (not function_call_result.parts or
+                not hasattr(function_call_result.parts[0], "function_response")):
+                raise Exception("Function call did not return a valid function_response.")
+            if verbose:
+                print(f"-> Function response: {function_call_result.parts[0].function_response.response}")
+            function_responses.append(function_call_result.parts[0])
+
+        if not function_responses:
+            raise Exception("No function responses generated, exiting.")
+
+        messages.append(types.Content(role="tool", parts=function_responses))
+
+    else:
+        print(f"Maximum iterations ({MAX_ITERS}) reached without completion.")
 
 
-
-if len(sys.argv) < 2:
-    print("Error: Please provide a prompt as a command line argument.")
-    print("Usage: python3 main.py \"Your prompt here\"")
-    exit(1)  # Exit with code 1 as instructed
-elif len(sys.argv) >2:
-    print(f'"User prompt: {user}"')
-    #print(f"Prompt tokens: {response.usage_metadata.prompt_token_count}")
-    #print(f"Response tokens: {response.usage_metadata.candidates_token_count}")
-else:
-    pass
-
-
-
-
-print(response.text)
-
-#print(f"Prompt tokens: {response.usage_metadata.prompt_token_count}")
-#print(f"Response tokens: {response.usage_metadata.candidates_token_count}")
+if __name__ == "__main__":
+    main()
